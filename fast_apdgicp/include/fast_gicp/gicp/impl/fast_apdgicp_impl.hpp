@@ -64,6 +64,16 @@ void FastAPDGICP<PointSource, PointTarget>::setDistVar(double var) {
   distance_variance_ = var;
 }
 
+template <typename PointSource, typename PointTarget>
+void FastAPDGICP<PointSource, PointTarget>::setRangeSigma(double sigma) {
+  range_sigma_ = sigma;
+}
+
+template <typename PointSource, typename PointTarget>
+void FastAPDGICP<PointSource, PointTarget>::setClusterWeight(double w) {
+  cluster_weight_ = w;
+}
+
 
 // template <typename PointSource, typename PointTarget>
 // void FastAPDGICP<PointSource, PointTarget>::setLambda(double lambda) {
@@ -192,7 +202,13 @@ void FastAPDGICP<PointSource, PointTarget>::update_correspondences(const Eigen::
     
     // Distance between the sensor origin and the point
     double dist = pt.getVector3fMap().template cast<double>().norm();
-    double s_x = dist * distance_variance_ / 400; // 0.00215
+    // The two angular axes scale with range because a fixed angular error
+    // subtends a wider arc further out. The range axis does not: an FMCW
+    // radar's range precision comes from its bandwidth and is constant, about
+    // 0.02 m here. The legacy form made it 0.00215 * dist -- roughly right at
+    // 10 m, ten times too large at 100 m -- so distant points were discounted
+    // along exactly the axis that observes forward motion.
+    double s_x = range_sigma_ > 0.0 ? range_sigma_ : dist * distance_variance_ / 400; // 0.00215
     double s_y = dist * sin(azimuth_variance_ / 180 * M_PI); // 0.00873
     double s_z = dist * sin(elevation_variance_ / 180 * M_PI); // 0.01745
     double elevation = atan2(sqrt(pt.x * pt.x + pt.y * pt.y), pt.z);
@@ -269,8 +285,9 @@ double FastAPDGICP<PointSource, PointTarget>::linearize(const Eigen::Isometry3d&
     double geo_weight = values(2);
 
     double cl_weight = 0.0;
-    if(target_->at(target_index).normal_x == input_->at(i).normal_x)
-      cl_weight = 1.0/correspondences_.size();
+    const bool labels_agree = target_->at(target_index).normal_x == input_->at(i).normal_x;
+    if(labels_agree)
+      cl_weight = cluster_weight_ > 0.0 ? cluster_weight_ : 1.0/correspondences_.size();
     
     // sum_errors += error.transpose() * mahalanobis_[i] * error;
     sum_errors += (1.0 + geo_weight + cl_weight) * error.transpose() * mahalanobis_[i] * error;
@@ -285,6 +302,16 @@ double FastAPDGICP<PointSource, PointTarget>::linearize(const Eigen::Isometry3d&
     dtdx0.block<3, 3>(0, 0) = skewd(transed_mean_A.head<3>()); // vector to Inverse Symetric Matrix
     dtdx0.block<3, 3>(0, 3) = -Eigen::Matrix3d::Identity();
     Eigen::Matrix<double, 4, 6> jlossexp = dtdx0; // Jacobian matrix of loss in lie algebra form ?
+    if(cluster_label_stats_) {
+      // The label is a rank by centroid distance, so it only corresponds across
+      // frames while the cluster count and ordering hold. Compared against the
+      // chance rate below, this says whether the mechanism has any signal.
+      cl_agree_ += labels_agree ? 1 : 0;
+      cl_total_ += 1;
+      cl_src_label_hist_[static_cast<int>(input_->at(i).normal_x)]++;
+      cl_tgt_label_hist_[static_cast<int>(target_->at(target_index).normal_x)]++;
+    }
+
     // H and b of Geometry
     Eigen::Matrix<double, 6, 6> H_geo = jlossexp.transpose() * mahalanobis_[i] * jlossexp;
     Eigen::Matrix<double, 6, 1> b_geo = jlossexp.transpose() * mahalanobis_[i] * error;
@@ -333,8 +360,9 @@ double FastAPDGICP<PointSource, PointTarget>::compute_error(const Eigen::Isometr
     double geo_weight = values(2);
 
     double cl_weight = 0.0;
-    if(target_->at(target_index).normal_x == input_->at(i).normal_x)
-      cl_weight = 1.0/correspondences_.size();
+    const bool labels_agree = target_->at(target_index).normal_x == input_->at(i).normal_x;
+    if(labels_agree)
+      cl_weight = cluster_weight_ > 0.0 ? cluster_weight_ : 1.0/correspondences_.size();
     
     // std::cout << "weight: " << geo_weight << " " << cl_weight << std::endl;
 

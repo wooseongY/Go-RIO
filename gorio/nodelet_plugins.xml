@@ -1,0 +1,16 @@
+<library path="lib/libpreprocessing_nodelet_ntu">
+  <class name="radar_graph_slam/PreprocessingNodeletNTU" type="radar_graph_slam::PreprocessingNodeletNTU" base_class_type="nodelet::Nodelet" />
+</library>
+
+<library path="lib/libpreprocessing_nodelet_msc">
+  <class name="radar_graph_slam/PreprocessingNodeletMSC" type="radar_graph_slam::PreprocessingNodeletMSC" base_class_type="nodelet::Nodelet" />
+</library>
+
+<library path="lib/libscan_matching_odometry_nodelet">
+  <class name="radar_graph_slam/ScanMatchingOdometryNodelet" type="radar_graph_slam::ScanMatchingOdometryNodelet" base_class_type="nodelet::Nodelet" />
+</library>
+
+<library path="lib/libradar_graph_slam_nodelet">
+  <class name="radar_graph_slam/RadarGraphSlamNodelet" type="radar_graph_slam::RadarGraphSlamNodelet" base_class_type="nodelet::Nodelet" />
+</library>
+

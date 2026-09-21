@@ -1,0 +1,55 @@
+radar_slam:
+
+  # Topics
+  pointCloudTopic: "/oculii_radar/point_cloud"               # Point cloud data <!-- pc2_raw inlier_pc2 segmented -->
+  imuTopic: "/imu/data"                         # IMU data
+  odomTopic: "/odom"                   # IMU pre-preintegration odometry, same frequency as IMU
+
+  # Frames
+  baselinkFrame: "base_link"
+  odometryFrame: "odom"
+  mapFrame: "map"
+
+  # GPS Settings
+  # useGpsElevation: false                      # if GPS elevation is bad, set to "false"
+  # gpsCovThreshold: 2.0                        # m^2, threshold for using GPS data
+  # poseCovThreshold: 25.0                      # m^2, threshold for using GPS data
+  
+  # Export settings
+  # savePCD: false                              # 
+  # savePCDDirectory: "/Downloads/4DRadarSLAM/"        #
+
+  # Sensor Settings
+  # downsampleRate: 1                           # default: 1. Downsample your data if too many points. i.e., 16 = 64 / 4, 16 = 16 / 1 
+  # lidarMinRange: 1.0                          # default: 1.0, minimum lidar range to be used
+  # lidarMaxRange: 1000.0                       # default: 1000.0, maximum lidar range to be used
+
+  # IMU Settings
+  imuGyrNoise: 0.00011667951042710442 # 1.5636343949698187e-03
+
+  # Extrinsics (Lidar -> IMU)
+  # extrinsicRot: [1, 0, 0,
+  #                 0, -1, 0,
+  #                 0, 0, -1]
+  # extrinsicRPY: [1, 0, 0,
+  #                 0, -1, 0,
+  #                 0, 0, -1]
+  # The MTi-630 on this rig is mounted right side up: the accelerometer reads
+  # +9.82 m/s^2 on z over the stationary opening of URBAN_A0, so the body frame
+  # is the IMU frame and no rotation is needed. This was a copy of NTU's value,
+  # a 180 degree roll for an inverted unit, which flipped the sign of the gyro's
+  # y and z -- and z is yaw for a ground vehicle.
+  extrinsicRot: [1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0]
+  extrinsicRPY: [1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0]
+  # extrinsicRot: [1, 0, 0,
+  #                 0, 1, 0,
+  #                 0, 0, 1]
+  # extrinsicRPY: [1, 0, 0,
+  #                 0, 1, 0,
+  #                 0, 0, 1]
+
+

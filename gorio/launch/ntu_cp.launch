@@ -1,0 +1,359 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Parameters -->
+  <rosparam file="$(find gorio)/config/params_ntu.yaml" command="load" />
+  <param name="use_sim_time" value="true"/>
+  
+  <!-- arguments -->
+  <arg name="nodelet_manager" default="radarslam_nodelet_manager" />
+  <arg name="enable_dynamic_object_removal" default="false" />
+  <arg name="enable_loop_closure" default="false" />
+  <arg name="enable_preintegration" default="true" /><!-- master switch for the GP preintegration edge -->
+
+  <!-- Output: writes <result_prefix>.txt (seconds) and <result_prefix>_ns.txt (ns).
+       Override it to keep separate runs from overwriting each other:
+         roslaunch gorio ntu_cp.launch result_prefix:=/root/catkin_ws/results/cp_run2 -->
+  <arg name="result_prefix" default="/root/catkin_ws/results/cp_run" />
+
+  <!-- Preintegration noise model. Both feed the GP covariance, which is now what
+       weights the preintegration edge, so they set how far the optimiser trusts
+       it against scan matching. Exposed as arguments for sweeping. -->
+  <arg name="preinteg_vel_bias_std" default="0.05" />
+  <arg name="preinteg_gyr_bias_std" default="0.001" />
+  <arg name="preinteg_gyr_scale_std" default="0.02" />
+  <arg name="preinteg_gyr_var" default="0" /><!-- rad^2/s handed to the GP. 0 derives it from imuGyrNoise, whose calibrated value is 9-31x below the angular random walk the data actually shows -->
+  <arg name="preinteg_vel_var" default="0" /><!-- 0 takes the ego-velocity estimator's own per-frame covariance -->
+  <arg name="bag_path" default="/root/data/4dradarslam/NTU4Dradlm/cp/" />
+  <arg name="bag_rate" default="1" />
+  <!-- Average the gyro over the stationary start and hand it to the GP as the
+       bias prior. Off: the preintegration currently accumulates about -14 deg of
+       yaw over cp that the scan matching does not, which is bias, not noise. -->
+  <arg name="preinteg_edge_dofs" default="full" /><!-- full | rotation_only | translation_only (diagnostic) -->
+  <arg name="preinteg_rot_weight_from_odom" default="true" /><!-- GP rotation information capped at the odometry edge, per axis -->
+  <arg name="preinteg_weight_cap_yaw_only" default="true" /><!-- cap yaw only; the GP is the better source for roll and pitch -->
+  <arg name="preinteg_yaw_cap_ratio" default="0.1" /><!-- GP yaw information capped at ratio x the odometry edge's; 1 equalises -->
+  <arg name="preinteg_rot_cov_inflation" default="1.0" /><!-- variance multiplier applied after the GP kernel, for gyro noise correlated over 10-80 ms that the model treats as white -->
+  <arg name="preinteg_cov_inflation_roll" default="1.0" />
+  <arg name="preinteg_cov_inflation_pitch" default="1.0" />
+  <arg name="preinteg_cov_inflation_yaw" default="1.0" />
+  <arg name="preinteg_cov_inflation_fwd" default="1.0" />
+  <arg name="preinteg_cov_inflation_lat" default="1.0" />
+  <arg name="preinteg_cov_inflation_vert" default="1.0" />
+  <arg name="odom_cov_inflation_roll" default="1.0" />
+  <arg name="odom_cov_inflation_pitch" default="1.0" />
+  <arg name="odom_cov_inflation_yaw" default="1.0" />
+  <arg name="odom_trans_cov_inflation_fwd" default="64.0" />
+  <arg name="odom_trans_cov_inflation_lat" default="64.0" />
+  <arg name="odom_trans_cov_inflation_vert" default="1.0" />
+  <arg name="preinteg_cap_ratio_trans_fwd" default="1.0" />
+  <arg name="preinteg_cap_ratio_trans_lat" default="1.0" />
+  <arg name="preinteg_cap_ratio_trans_vert" default="2.0" />
+  <arg name="preinteg_cap_ratio_roll" default="2.0" />
+  <arg name="preinteg_cap_ratio_pitch" default="2.0" />
+  <arg name="odometry_yaw_gate_deg" default="3" /><!-- deflate the odometry edge when its yaw disagrees with the GP by more than this; 0 = off -->
+  <arg name="odometry_yaw_gate_deflate" default="0.01" />
+  <arg name="odometry_cross_check" default="true" /><!-- deflate the odometry edge when its translation disagrees with the GP's -->
+  <arg name="odometry_cross_check_thresh" default="0.15" /><!-- metres; 0.15 was calibrated on cp, where every flag is a real failure. On the long sequences it sits inside the normal spread and half the flags are the better factor; 0.5 flags only genuine failures there -->
+  <arg name="odometry_cross_check_deflate" default="0.01" />
+  <arg name="preinteg_yaw_weight_from_disagreement" default="false" /><!-- yaw information from the observed GP-vs-scan-matching disagreement; supersedes the cap -->
+  <arg name="preinteg_yaw_var_tau" default="60.0" />
+  <arg name="odom_trans_weight_from_preint" default="false" /><!-- scan matching translation information capped at the preintegration's, per axis -->
+  <!-- v_body = v_radar - omega x r, r the radar origin in body coordinates. -->
+  <arg name="imu_time_offset" default="0.114" /><!-- seconds, added to IMU stamps; the IMU clock runs behind the radar -->
+
+  <!-- Send only the non-ground returns to scan matching. Ground points lie on a
+       plane and so carry almost no yaw information, yet they dominate the GICP
+       correspondence count in a carpark. -->
+  <arg name="scan_matching_use_nonground_only" default="false" />
+
+  <!-- Robust kernel on the scan matching edges. Measured against ground truth,
+       the scan matching translation is good at the median (0.092 m on a 0.535 m
+       interval) but jumps to 0.501 m by the 75th percentile, so roughly a
+       quarter of keyframe pairs are gross failures entering the graph at full
+       weight. -->
+  <arg name="odometry_edge_robust_kernel" default="NONE" />
+  <arg name="odometry_edge_robust_kernel_size" default="1.0" />
+
+  <!-- Floor edge uncertainty. Measured against ground truth the plane normal is
+       off by 1.57 deg at the median, four times the preintegration rotation
+       error, so the plane is a worse attitude measurement than the odometry
+       already has. Loosening the normal while keeping the distance tight takes
+       the plane strength (z) without its weakness (roll and pitch). -->
+
+  <!-- GP state timeline rate. Off follows the slowest input, the ~12 Hz
+       ego-velocity; on follows the 200 Hz gyro. -->
+  <arg name="gp_state_freq_from_gyro" default="false" />
+  <arg name="gp_rot_lengthscale" default="0" /><!-- seconds; the gyro decorrelates in 7-57 ms while the kernel has been using 250. 0 keeps 3/state_freq -->
+  <arg name="gp_vel_lengthscale" default="0" /><!-- seconds; the radar ego-velocity needs a wide kernel, which is why sharing one value with rotation failed before -->
+
+
+  <!-- Absolute roll/pitch prior from the IMU's gravity-corrected attitude.
+       Unlike the odometry and preintegration edges this references a fixed
+       instant rather than the previous keyframe, so its error does not
+       accumulate along the chain. -->
+  <!-- Seed the registration's rotation with the AHRS inter-frame rotation.
+       Without it the initial guess asserts no rotation since the previous frame,
+       and the solver converges short on sparse radar: yaw comes out 2.3% small,
+       17 deg of accumulated heading over cp. -->
+  <!-- RViz needs X11 forwarded into the container; set false for headless runs.
+       Disabling it also removes the only subscriber to /radar_graph_slam/markers,
+       so create_marker_array is skipped and the run is slightly faster. -->
+  <arg name="enable_rviz" default="true" />
+
+  <arg name="keyframe_delta_trans_front_end" default="0.5" />
+  <arg name="keyframe_delta_trans_back_end" default="0.5" /><!-- 0.5 0.8 1 2 -->
+  <arg name="keyframe_delta_angle" default="0.1745" /><!-- 10°: 0.1745 15°: 0.2612 --> 
+  <arg name="keyframe_delta_time" default="2.0" /> <!-- 1.0, 2.0 -->
+
+  <arg name="enable_transform_thresholding" default="true" />
+  
+  <!-- ICP NDT_OMP FAST_GICP FAST_APDGICP DOPP_APDGICP FAST_VGICP   -->
+  <arg name="registration_method" default="FAST_APDGICP" />
+  <arg name="reg_resolution" default="1.0" />
+  <!-- Registration convergence and correspondence radius. Were literals in
+       both node blocks, so they could not be swept from the command line. -->
+  <arg name="reg_transformation_epsilon" default="0.0005" />
+  <arg name="reg_max_correspondence_distance" default="2.0" />
+  <arg name="reg_max_optimizer_iterations" default="64" />
+  
+  <arg name="dist_var" default="0.86" />
+  <arg name="decimate_stride" default="1" /><!-- keep one point in every N by index; the GICP Hessian scales with the correspondence count, so this de-weights the odometry edge against the preintegration -->
+  <arg name="sm_downsample_method" default="NONE" /><!-- the scan matching registration input; NONE is the shipped setting, DECIMATE keeps one point in every decimate_stride by index -->
+  <arg name="apd_range_sigma" default="0" /><!-- metres; range-axis sigma of the APD ellipsoid. 0 keeps the legacy dist*dist_var/400, ten times too large at 100 m -->
+  <arg name="patchwork_preserve_nonground_intensity" default="false" /><!-- false overwrites every non-ground intensity with 1, as the release does, which is also why RNR flags nothing -->
+  <arg name="patchwork_erase_all_underground" default="true" /><!-- true erases every under-ground point; the release skips every other one -->
+  <arg name="patchwork_rnr_diag" default="false" /><!-- report which of the reflected-noise-removal conditions is never met -->
+  <arg name="egovel_exclude_ground" default="false" /><!-- fit the Doppler velocity on non-ground returns only; the low-grazing-angle ground returns carry an elevation bias and dominate the fit by count -->
+  <arg name="egovel_min_nonground" default="60" />
+  <!-- Half-width of the elevation band the Doppler fit accepts. The fit residual
+       is flat within +-4 deg of the horizon and reaches 4-5% of speed beyond +-15 deg
+       on all four sequences, which is an elevation-dependent direction error that one
+       velocity vector cannot absorb. 22.5 is the shipped value. -->
+  <arg name="egovel_elevation_thresh_deg" default="22.5" />
+  <arg name="egovel_elevation_sigma_deg" default="0.0" /><!-- degrees; weight each Doppler return by how much the radar's elevation uncertainty can move its residual. Measured: cp 0.87, nyl 1.14, loop2 0.99, loop3 1.93. 0 keeps the unweighted fit -->
+  <arg name="egovel_doppler_sigma" default="0.05" />
+  <arg name="apd_cluster_weight" default="0" /><!-- weight added when cluster labels agree. 0 keeps the legacy 1/N, about 2e-4 and so inert -->
+  <arg name="apd_cluster_label_stats" default="false" /><!-- count how often a correspondence's cluster labels agree, against the chance rate -->
+  <arg name="azimuth_var" default="0.5" />
+  <arg name="elevation_var" default="1.0" /><!-- 1.0 -->
+  <arg name="lambda" default="0.01" />
+
+  <!-- optional arguments -->
+
+  <!-- transformation between lidar and base_link -->
+  <!-- <node pkg="tf" type="static_transform_publisher" name="lidar2base_publisher" args="0 0 0 0 0 0 base_link velodyne 10" /> -->
+  
+  <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager)" args="manager" output="screen"/>
+
+  <!-- radar_preprocessing_nodelet -->
+  <node pkg="nodelet" type="nodelet" name="radar_preprocessing_nodelet" args="load radar_graph_slam/PreprocessingNodeletNTU $(arg nodelet_manager)">
+    <param name="egovel_elevation_thresh_deg" value="$(arg egovel_elevation_thresh_deg)" />
+    <param name="egovel_elevation_sigma_deg" value="$(arg egovel_elevation_sigma_deg)" />
+    <param name="egovel_doppler_sigma" value="$(arg egovel_doppler_sigma)" />
+
+    <param name="patchwork_rnr_diag" value="$(arg patchwork_rnr_diag)" />
+    <param name="patchwork_erase_all_underground" value="$(arg patchwork_erase_all_underground)" />
+    <param name="patchwork_preserve_nonground_intensity" value="$(arg patchwork_preserve_nonground_intensity)" />
+
+    <!-- Radar-to-body. The four matrices this replaces are three calibrations
+         composed, radar to thermal to RGB to livox; this is their product, so the
+         extrinsic is read rather than assembled. Row major, sixteen values. -->
+    <rosparam file="$(find gorio)/config/extrinsics_ntu.yaml" command="load" />
+    <rosparam param="radar_to_body">[+0.998742069436, -0.021545931843, +0.045279799573, +0.296001694594, +0.020570177936, +0.999548668692, +0.021904589263, -0.129886837458, -0.045731279730, -0.020945610263, +0.998733968425, -0.004543126257, 0, 0, 0, 1]</rosparam>
+    <param name="egovel_exclude_ground" value="$(arg egovel_exclude_ground)" />
+    <param name="egovel_min_nonground" value="$(arg egovel_min_nonground)" />
+
+    <!-- distance filter -->
+    <param name="use_distance_filter" value="true" />
+    <param name="distance_near_thresh" value="1" />
+    <param name="distance_far_thresh" value="200.0" />
+    <param name="z_low_thresh" value="-5.0" />
+    <param name="z_high_thresh" value="100.0" />
+    <!-- NONE, VOXELGRID(0.1), or APPROX_VOXELGRID -->
+    <param name="downsample_method" value="VOXELGRID" />
+    <param name="downsample_resolution" value="0.1" />
+    <!-- NONE, RADIUS 2(initial 0.5 2), STATISTICAL, or BILATERAL -->
+    <param name="outlier_removal_method" value="RADIUS" />
+    <param name="statistical_mean_k" value="30" />
+    <param name="statistical_stddev" value="1.2" />
+    <param name="radius_radius" value="2" />
+    <param name="radius_min_neighbors" value="5" />
+    <!-- Power Filterring -->
+    <param name="power_threshold" value="0.0" />
+    <!-- Ego Velocity Estimation -->
+    <param name="enable_dynamic_object_removal" value="$(arg enable_dynamic_object_removal)" />
+    <param name="scan_matching_use_nonground_only" value="$(arg scan_matching_use_nonground_only)" />
+    <!-- ground truth publication -->
+    <param name="file_location_4d" value="/root/data/4dradarslam/result_cp/result_main/4dradarslam.txt" />
+  </node>
+
+
+  <node pkg="nodelet" type="nodelet" name="scan_matching_odometry_nodelet" args="load radar_graph_slam/ScanMatchingOdometryNodelet $(arg nodelet_manager)">
+    <param name="decimate_stride" value="$(arg decimate_stride)" />
+    <param name="apd_range_sigma" value="$(arg apd_range_sigma)" />
+    <param name="apd_cluster_weight" value="$(arg apd_cluster_weight)" />
+    <param name="apd_cluster_label_stats" value="$(arg apd_cluster_label_stats)" />
+    <param name="keyframe_delta_trans" value="$(arg keyframe_delta_trans_front_end)" />
+    <param name="keyframe_delta_angle" value="$(arg keyframe_delta_angle)" /> 
+    <param name="keyframe_delta_time" value="$(arg keyframe_delta_time)" /> 
+    <param name="keyframe_min_size" value="100" />
+    <param name="enable_transform_thresholding" value="$(arg enable_transform_thresholding)" />
+    <param name="max_acceptable_trans" value="2.0" />
+    <param name="max_acceptable_angle" value="3" /><!-- degree -->
+    <param name="max_diff_trans" value="0.3" />
+    <param name="max_diff_angle" value="0.8" />
+    <param name="max_egovel_cum" value="15" /><!-- 12m/s -->
+    <param name="downsample_method" value="$(arg sm_downsample_method)" />
+    <param name="downsample_resolution" value="0.1" />
+    <!-- ICP, GICP, NDT, GICP_OMP, NDT_OMP, FAST_GICP(recommended), or FAST_VGICP -->
+    <param name="registration_method" value="$(arg registration_method)" />
+    <param name="dist_var" value="$(arg dist_var)" /><!--  -->
+    <param name="azimuth_var" value="$(arg azimuth_var)" /><!--  -->
+    <param name="elevation_var" value="$(arg elevation_var)" /><!--  -->
+    <param name="lambda" value="$(arg lambda)" /><!--  -->
+    <param name="reg_num_threads" value="0" />
+    <param name="reg_transformation_epsilon" value="$(arg reg_transformation_epsilon)"/>
+    <param name="reg_maximum_iterations" value="64"/>
+    <param name="reg_max_correspondence_distance" value="$(arg reg_max_correspondence_distance)"/>
+    <param name="reg_max_optimizer_iterations" value="$(arg reg_max_optimizer_iterations)"/>
+    <param name="reg_use_reciprocal_correspondences" value="false"/>
+    <param name="reg_correspondence_randomness" value="20"/>
+    <param name="reg_resolution" value="$(arg reg_resolution)" />
+    <param name="use_ego_vel" value="false"/><!-- the registration guess does not use the Doppler displacement; the rejection fallback still does -->
+  </node>
+
+  <!-- radar_graph_slam_nodelet -->
+  <node pkg="nodelet" type="nodelet" name="radar_graph_slam_nodelet" args="load radar_graph_slam/RadarGraphSlamNodelet $(arg nodelet_manager)" output="screen">
+    <param name="decimate_stride" value="$(arg decimate_stride)" />
+    <param name="apd_range_sigma" value="$(arg apd_range_sigma)" />
+    <param name="apd_cluster_weight" value="$(arg apd_cluster_weight)" />
+    <param name="apd_cluster_label_stats" value="$(arg apd_cluster_label_stats)" />
+    <!-- optimization params -->
+    <!-- typical solvers: gn_var, gn_fix6_3, gn_var_cholmod, lm_var, lm_fix6_3, lm_var_cholmod, ... -->
+    <param name="g2o_solver_type" value="lm_var_cholmod" />
+    <param name="g2o_solver_num_iterations" value="512" />
+    <!-- constraint switches -->
+    <!-- keyframe registration params --> 
+    <param name="max_keyframes_per_update" value="1000" />
+    <param name="keyframe_delta_trans" value="$(arg keyframe_delta_trans_back_end)" />
+    <param name="keyframe_delta_angle" value="$(arg keyframe_delta_angle)" />
+    <param name="keyframe_min_size" value="500" />
+    <!-- fix first node for optimization stability -->
+    <param name="fix_first_node" value="true"/>
+    <param name="fix_first_node_stddev" value="10 10 10 1 1 1"/>
+    <param name="fix_first_node_adaptive" value="true"/>
+    <!-- Scan Context Loop Closure params 15 25 15 2.5 -->
+    
+    <!-- scan matching params -->
+    <param name="registration_method" value="$(arg registration_method)" />
+    <param name="reg_num_threads" value="0" />
+    <param name="reg_transformation_epsilon" value="$(arg reg_transformation_epsilon)"/>
+    <param name="reg_maximum_iterations" value="64"/>
+    <param name="reg_max_correspondence_distance" value="$(arg reg_max_correspondence_distance)"/>
+    <param name="reg_max_optimizer_iterations" value="$(arg reg_max_optimizer_iterations)"/>
+    <param name="reg_use_reciprocal_correspondences" value="false"/>
+    <param name="reg_correspondence_randomness" value="20"/>
+    <param name="reg_resolution" value="$(arg reg_resolution)" />
+    <!-- edge params -->
+    <!-- Gaussian process preintegration -->
+    <param name="gp_state_freq_from_gyro" value="$(arg gp_state_freq_from_gyro)" />
+    <param name="gp_rot_lengthscale" value="$(arg gp_rot_lengthscale)" />
+    <param name="gp_vel_lengthscale" value="$(arg gp_vel_lengthscale)" />
+    <param name="result_prefix" value="$(arg result_prefix)" />
+    <param name="preinteg_vel_bias_std" value="$(arg preinteg_vel_bias_std)" />
+    <param name="preinteg_gyr_bias_std" value="$(arg preinteg_gyr_bias_std)" />
+    <param name="preinteg_gyr_scale_std" value="$(arg preinteg_gyr_scale_std)" />
+    <param name="preinteg_gyr_var" value="$(arg preinteg_gyr_var)" />
+    <param name="preinteg_vel_var" value="$(arg preinteg_vel_var)" />
+    <param name="imu_time_offset" value="$(arg imu_time_offset)" />
+    <param name="preinteg_edge_dofs" value="$(arg preinteg_edge_dofs)" />
+    <param name="preinteg_rot_weight_from_odom" value="$(arg preinteg_rot_weight_from_odom)" />
+    <param name="preinteg_weight_cap_yaw_only" value="$(arg preinteg_weight_cap_yaw_only)" />
+    <param name="preinteg_yaw_cap_ratio" value="$(arg preinteg_yaw_cap_ratio)" />
+    <param name="preinteg_rot_cov_inflation" value="$(arg preinteg_rot_cov_inflation)" />
+    <param name="preinteg_cov_inflation_roll" value="$(arg preinteg_cov_inflation_roll)" />
+    <param name="preinteg_cov_inflation_pitch" value="$(arg preinteg_cov_inflation_pitch)" />
+    <param name="preinteg_cov_inflation_yaw" value="$(arg preinteg_cov_inflation_yaw)" />
+    <param name="preinteg_cov_inflation_fwd" value="$(arg preinteg_cov_inflation_fwd)" />
+    <param name="preinteg_cov_inflation_lat" value="$(arg preinteg_cov_inflation_lat)" />
+    <param name="preinteg_cov_inflation_vert" value="$(arg preinteg_cov_inflation_vert)" />
+    <param name="odom_cov_inflation_roll" value="$(arg odom_cov_inflation_roll)" />
+    <param name="odom_cov_inflation_pitch" value="$(arg odom_cov_inflation_pitch)" />
+    <param name="odom_cov_inflation_yaw" value="$(arg odom_cov_inflation_yaw)" />
+    <param name="odom_trans_cov_inflation_fwd" value="$(arg odom_trans_cov_inflation_fwd)" />
+    <param name="odom_trans_cov_inflation_lat" value="$(arg odom_trans_cov_inflation_lat)" />
+    <param name="odom_trans_cov_inflation_vert" value="$(arg odom_trans_cov_inflation_vert)" />
+    <param name="preinteg_cap_ratio_trans_fwd" value="$(arg preinteg_cap_ratio_trans_fwd)" />
+    <param name="preinteg_cap_ratio_trans_lat" value="$(arg preinteg_cap_ratio_trans_lat)" />
+    <param name="preinteg_cap_ratio_trans_vert" value="$(arg preinteg_cap_ratio_trans_vert)" />
+    <param name="preinteg_cap_ratio_roll" value="$(arg preinteg_cap_ratio_roll)" />
+    <param name="preinteg_cap_ratio_pitch" value="$(arg preinteg_cap_ratio_pitch)" />
+    <param name="odometry_yaw_gate_deg" value="$(arg odometry_yaw_gate_deg)" />
+    <param name="odometry_yaw_gate_deflate" value="$(arg odometry_yaw_gate_deflate)" />
+    <param name="odometry_cross_check" value="$(arg odometry_cross_check)" />
+    <param name="odometry_cross_check_thresh" value="$(arg odometry_cross_check_thresh)" />
+    <param name="odometry_cross_check_deflate" value="$(arg odometry_cross_check_deflate)" />
+    <param name="preinteg_yaw_weight_from_disagreement" value="$(arg preinteg_yaw_weight_from_disagreement)" />
+    <param name="preinteg_yaw_var_tau" value="$(arg preinteg_yaw_var_tau)" />
+    <param name="odom_trans_weight_from_preint" value="$(arg odom_trans_weight_from_preint)" />
+    <!-- Preintegration -->
+    <param name="enable_preintegration" value="$(arg enable_preintegration)" />
+      <param name="use_egovel_preinteg_trans" value="true" /><!-- Ego Velocity Integration - Translation -->
+
+
+
+    <!-- scan matching -->
+    <!-- robust kernels: NONE, Cauchy, DCS, Fair, GemanMcClure, Huber, PseudoHuber, Saturated, Tukey, Welsch -->
+    <!-- Loop closure. Off in every shipped configuration and in every reported
+         result; kept switchable. With the flag false no detector is built, no
+         Scan Context descriptor is computed and no loop factor is added, so
+         these parameters are read only when it is turned on. -->
+    <param name="enable_loop_closure" value="$(arg enable_loop_closure)"/>
+    <param name="enable_pf" value="true"/><!-- loop prefiltering -->
+    <param name="enable_odom_check" value="true"/>
+    <param name="distance_thresh" value="10.0" />
+    <param name="accum_distance_thresh" value="50.0" /><!-- minimum distance between the two ends of a loop -->
+    <param name="min_loop_interval_dist" value="10.0" /><!-- minimum distance between a new loop edge and the last one -->
+    <param name="max_yaw_difference" value="20" /><!-- maximum yaw difference between the two ends -->
+    <param name="sc_dist_thresh" value="0.5" /><!-- Scan Context matching score; 0.4-0.6 works -->
+    <param name="sc_azimuth_range" value="56.5" />
+    <param name="historyKeyframeFitnessScore" value="6" />
+    <param name="odom_check_trans_thresh" value="0.3" />
+    <param name="odom_check_rot_thresh" value="0.05" />
+    <param name="pairwise_check_trans_thresh" value="1.5" />
+    <param name="pairwise_check_rot_thresh" value="0.2" />
+    <param name="loop_closure_edge_robust_kernel" value="Huber" />
+    <param name="loop_closure_edge_robust_kernel_size" value="1.0" />
+    <param name="show_sphere" value="false" />
+    <param name="odometry_edge_robust_kernel" value="$(arg odometry_edge_robust_kernel)" />
+    <param name="odometry_edge_robust_kernel_size" value="$(arg odometry_edge_robust_kernel_size)" />
+    <param name="const_stddev_x" value="0.5" />
+    <param name="const_stddev_q" value="0.1" />
+    <param name="var_gain_a" value="20.0" />
+    <param name="min_stddev_x" value="0.1" />
+    <param name="max_stddev_x" value="5.0" />
+    <param name="min_stddev_q" value="0.05" />
+    <param name="max_stddev_q" value="0.2" />
+    <!-- update params -->
+    <param name="graph_update_interval" value="2.0" />
+    <param name="map_cloud_update_interval" value="6.0" />
+    <param name="map_cloud_resolution" value="0.05" />
+    <!-- marker params -->
+    <!-- ground truth publication -->
+    <!-- <param name="gt_file_location" value="/media/wooseong/ws_ssdP/4dradarslam/gt_odom.txt" /> -->
+  </node>
+
+  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz_slam"
+        args="-d $(find gorio)/rviz/radar_graph_slam.rviz" respawn="true"/>
+
+  <!--- Rosbag Play -->
+  <!-- Bag playback. Point `bag_path` at your own copy. Nothing is dropped when
+       the pipeline falls behind: the queues are large and the backlog is drained
+       after the bag ends, so a faster `bag_rate` moves work later rather than
+       discarding it. -->
+  <node pkg="rosbag" type="play" name="player"
+        args="--clock --rate=$(arg bag_rate) --duration=10000
+    $(arg bag_path)cp.bag
+              --topic /radar_enhanced_pcl /vectornav/imu /livox/lidar" />
+
+</launch>

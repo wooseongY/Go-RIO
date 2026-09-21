@@ -1,0 +1,27 @@
+# Radar -> body extrinsic for MSC-RAD4R, 4x4 homogeneous, row major.
+#
+# The body frame is the IMU frame: x forward, y left, z up. The dataset's IMU
+# (Xsens MTi-630) is mounted right side up -- the accelerometer reads +9.82 m/s^2
+# on z over the stationary opening of URBAN_A0 -- so params_msc.yaml must carry an
+# identity extrinsicRot, not the 180 degree roll NTU needs for its inverted unit.
+#
+# Rotation: composed from the dataset's own CALIBRATION_CAMERA_RADAR (the
+# calibration_radar_camer_imu set) and the Kalibr camera-IMU result, then
+# re-orthonormalised. The radar frame is x right, y down, z forward, so no axis
+# permutation is applied; NTU needs one because its radar reports x forward.
+# The ideal rotation for those two conventions is rpy = (-90, 0, -90) and this
+# composition gives (-90.268, 0.002, -89.199), i.e. 0.84 degrees of real
+# mounting error. That is the sanity check that the rotation is trustworthy.
+#
+# Translation: from the platform CAD, 2.06 m forward and 1.00 m below the IMU.
+# The published calibration says 1.407 m forward, 0.65 m short, and its height of
+# 0.935 m agrees with the CAD's 1.00 m; the mechanical drawing is taken as
+# authoritative for the lever arm. Note the dataset ships three radar calibration
+# sets and only this one matches its own documented convention -- the LOOP and
+# RURAL files record the inverse transform, which reads as a radar facing
+# backwards (yaw -180 deg). Their own README warns the results "may not be
+# perfect".
+radar_to_body: [+0.013976518347, -0.004676032254, +0.999891389931, +2.060000000000,
+                -0.999902323194, -0.000033648183, +0.013976513815, +0.000000000000,
+                -0.000031710101, -0.999989066735, -0.004676045798, -1.000000000000,
+                +0.000000000000, +0.000000000000, +0.000000000000, +1.000000000000]

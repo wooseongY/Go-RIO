@@ -1,6 +1,7 @@
 #ifndef FAST_GICP_FAST_IGICP_HPP
 #define FAST_GICP_FAST_IGICP_HPP
 
+#include <map>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -55,6 +56,23 @@ public:
   void setAzimuthVar(double var);
   void setElevationVar(double var);
   void setDistVar(double var);
+  // Range-axis sigma in metres. A radar's range precision is set by its
+  // bandwidth and does not grow with distance, unlike the two angular axes.
+  // Zero keeps the legacy distance-proportional form.
+  void setRangeSigma(double sigma);
+  // Weight added when a correspondence's cluster labels agree. Zero keeps the
+  // legacy 1/(number of correspondences), which is ~2e-4 and so inert.
+  void setClusterWeight(double w);
+  // Diagnostic: count how often a correspondence's cluster labels agree, and
+  // the label histograms needed for the chance rate.
+  void setClusterLabelStats(bool on) { cluster_label_stats_ = on; }
+  void clusterLabelStats(long& agree, long& total,
+                         std::map<int, long>& src, std::map<int, long>& tgt) const {
+    agree = cl_agree_; total = cl_total_; src = cl_src_label_hist_; tgt = cl_tgt_label_hist_;
+  }
+  void resetClusterLabelStats() {
+    cl_agree_ = 0; cl_total_ = 0; cl_src_label_hist_.clear(); cl_tgt_label_hist_.clear();
+  }
 
   // void setLambda(double lambda);
   // void setSourceVelocity(const Eigen::Vector3d& vel);
@@ -116,6 +134,13 @@ protected:
   double azimuth_variance_ = 0.5;
   double elevation_variance_ = 1.0;
   double distance_variance_ = 0.86;
+  double range_sigma_ = 0.0;
+  double cluster_weight_ = 0.0;
+  bool cluster_label_stats_ = false;
+  mutable long cl_agree_ = 0;
+  mutable long cl_total_ = 0;
+  mutable std::map<int, long> cl_src_label_hist_;
+  mutable std::map<int, long> cl_tgt_label_hist_;
 
   Eigen::Vector3d source_vel_;
   Eigen::Vector3d target_vel_;

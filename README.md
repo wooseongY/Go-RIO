@@ -13,6 +13,7 @@
 </p>
 
 ## News
+* **[19/09/2026]**: Updated release: MSC-RAD4R support and a cleaned tree.
 * **[12/05/2025]**: Full source code is uploaded.
 * **[24/04/2025]**: Our paper is selected as the **finalist** for ICRA 2025 **Best Paper Award**!
 * **[29/01/2025]**: Our paper is accepted to ICRA 2025.
@@ -38,12 +39,16 @@ We recommend using the provided Docker environment (Ubuntu 20.04) for testing ou
     ./run.sh
     catkin_make && source devel/setup.bash
     ```
-5. Modify the bag file path in the rosbag_play_\<sequence\>.launch file as "/root/data/<your_bag_directory>", which contains your proper bag file.
-6. Launch our algorithm and enjoy :)
+5. Launch our algorithm and enjoy :)
    ```bash
-   roslaunch gorio <launch file name>.launch
+   roslaunch gorio ntu_cp.launch                        # NTU4DRadLM
+   roslaunch gorio msc_urban.launch bag:=URBAN_A0.bag   # MSC-RAD4R, urban and road
+   roslaunch gorio msc_rural.launch bag:=RURAL_A2.bag   # MSC-RAD4R, rural
    rostopic pub /command std_msgs/String "output_aftmapped"
    ```
+   Each launch plays its own bag and carries the configuration used for the
+   reported results. Set `bag_path:=<your directory>` if your copy lives
+   elsewhere.
 
 ## Citation
 If you use our paper for any academic work, please cite our paper.

@@ -1,0 +1,20 @@
+# Radar-to-body extrinsic for the NTU4DRadLM rig, 16 values, row major.
+#
+# A calibration is data, not code. The source used to assemble this from four
+# literals -- radar to thermal to RGB to livox, plus an axis reordering -- and
+# nothing else needed the intermediate hops, so only the product is kept.
+#
+# This is that product. It carries 2.621 deg of pitch. The dataset ships its own
+# numbers for the first hop and two open issues on its repository report that
+# they disagree with the reference implementation's (NTU4DRadLM #14 and #17),
+# neither answered, so treat this value as the rig's stated calibration rather
+# than as ground truth.
+#
+# The two vehicle sequences override it in their launch files with the value
+# measured from the pipeline's own two odometry sources, which removes 2.6 deg of
+# pitch and 71-91% of their vertical error.
+
+radar_to_body: [ 0.998742069436, -0.021545931843,  0.045279799573,  0.296001694594,
+                 0.020570177936,  0.999548668692,  0.021904589263, -0.129886837458,
+                -0.045731279730, -0.020945610263,  0.998733968425, -0.004543126257,
+                 0.0,             0.0,             0.0,             1.0]
